@@ -1,0 +1,367 @@
+﻿@page "/"
+@using Microsoft.AspNetCore.Mvc.TagHelpers
+@using Microsoft.Data.Sqlite
+@using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage
+@inject ProtectedSessionStorage ProtectedSessionStore
+@inject NavigationManager NavigationManager
+@using BlazorBootstrap
+
+@rendermode InteractiveServer
+
+<PageTitle>Home</PageTitle>
+<Modal @ref="editTaskModal" />
+
+@if (isLoading)
+{
+    <div class="d-flex justify-content-center">
+        <Spinner Type="SpinnerType.Border" />
+    </div>
+}
+else if (!IsAdminLoggedIn)
+{
+    <div class="d-flex justify-content-center flex-column align-items-center">
+        <p class="text-center">Please log in as admin to access this page.</p>
+        <a class="btn btn-primary" href="/login">Login</a>
+    </div>
+}
+else
+{
+    <h1 class="text-center">To-Do Pro App</h1>
+
+    <h3>Your To-Do List:</h3>
+    <ul class="list-group">
+        @foreach (var task in tasks)
+        {
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <input type="checkbox" class="form-check-input" checked="@task.IsComplete"
+                       @onchange="async (e) => await UpdateTaskAsync(task, e.Value is bool value && value)" />
+                <span class="task-text"
+                      style="text-decoration: @(task.IsComplete ? "line-through" : "none")">@task.Task</span>
+
+                @if (task.AssignedTo != null)
+                {
+                    <span class="badge bg-info">Assigned to: @GetEmployeeUsername(task.AssignedTo)</span>
+                }
+
+                <span class="text-muted">Updated: @task.UpdatedAt.ToString("g")</span>
+
+                <button class="btn btn-warning btn-sm" @onclick="() => OpenEditTaskModal(task)">Edit</button>
+                <button class="btn btn-danger btn-sm" @onclick="() => DeleteTaskAsync(task)">Delete</button>
+            </li>
+        }
+    </ul>
+
+    @if (tasks.Count == 0)
+    {
+        <p class="text-center text-muted mt-3">No tasks found. Add some tasks!</p>
+    }
+ <br/>
+    <h3>Assign Tasks to Employees:</h3>
+    <div class="mb-3">
+        <label for="assignTo" class="form-label">Assign Task to:</label>
+        <select id="assignTo" class="form-control" @bind="selectedEmployee">
+            <option value="">Select Employee</option>
+            @foreach (var employee in employees)
+            {
+                <option value="@employee.Id">@employee.Username</option>
+            }
+        </select>
+
+        <label for="taskInput" class="form-label mt-2">Enter Task to Assign:</label>
+        <input id="taskInput" class="form-control" type="text" @bind="newTask" placeholder="Enter task description" />
+
+        <button class="btn btn-primary mt-2" @onclick="HandleAssign">Assign</button>
+    </div>
+    <button @onclick="HandleLogout" class="btn btn-danger mt-3">Logout</button>
+}
+
+<Modal @ref="editTaskModal">
+    <BodyTemplate>
+        <EditForm Model="selectedTask" OnValidSubmit="HandleEditSave">
+            <div class="mb-3">
+                <label for="taskName" class="form-label">Task Name</label>
+                <input id="taskName" class="form-control" @bind="selectedTask.Task" />
+            </div>
+            <div class="mb-3">
+                <label for="assignTo" class="form-label">Assign To</label>
+                <select id="assignTo" class="form-control" @bind="selectedEmployeeId">
+                    <option value="0">Unassigned</option>
+                    @foreach (var employee in employees)
+                    {
+                        <option value="@employee.Id">@employee.Username</option>
+                    }
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn btn-secondary" @onclick="() => editTaskModal.HideAsync()">Cancel</button>
+        </EditForm>
+    </BodyTemplate>
+</Modal>
+
+@code {
+    private Modal editTaskModal = default!;
+    private TaskItem selectedTask = new();
+    private int selectedEmployeeId;
+    private bool IsAdminLoggedIn;
+    private const string ConnectionString = "Data Source=todo.db";
+    private string selectedEmployee = string.Empty;
+    private int selectedTaskId;
+    private string newTask = string.Empty;
+    private List<TaskItem> tasks = new();
+    private List<Employee> employees = new();
+    private bool isLoading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await CheckIsAdminLoggedIn();
+            await LoadTasksAsync();
+            await CreateEmployeesTableIfNotExistsAsync();
+            await LoadEmployeesAsync();
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task OpenEditTaskModal(TaskItem task)
+    {
+        selectedTask = new TaskItem
+        {
+            Id = task.Id,
+            Task = task.Task,
+            IsComplete = task.IsComplete,
+            AssignedTo = task.AssignedTo,
+            CreatedAt = task.CreatedAt,
+            UpdatedAt = task.UpdatedAt
+        };
+        selectedEmployeeId = task.AssignedTo ?? 0;
+        await editTaskModal.ShowAsync();
+    }
+
+    private async Task HandleEditSave()
+    {
+        try
+        {
+            selectedTask.AssignedTo = selectedEmployeeId == 0 ? null : selectedEmployeeId;
+            await UpdateTaskAsync(selectedTask, selectedTask.IsComplete);
+            await editTaskModal.HideAsync();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error saving edit: {ex}");
+        }
+    }
+
+    private async Task CheckIsAdminLoggedIn()
+    {
+        var result = await ProtectedSessionStore.GetAsync<bool>("isAdminLoggedIn");
+        IsAdminLoggedIn = result is { Success: true, Value: true };
+    }
+
+    private async Task LoadTasksAsync()
+    {
+        try
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            await connection.OpenAsync();
+
+            var query = "SELECT Id, Task, IsComplete, AssignedTo, CreatedAt, UpdatedAt FROM ToDo ORDER BY UpdatedAt DESC";
+            using var command = new SqliteCommand(query, connection);
+            using var reader = await command.ExecuteReaderAsync();
+
+            var newTasks = new List<TaskItem>();
+            while (await reader.ReadAsync())
+            {
+                newTasks.Add(new TaskItem
+                {
+                    Id = reader.GetInt32(0),
+                    Task = reader.GetString(1),
+                    IsComplete = reader.GetInt32(2) == 1,
+                    AssignedTo = reader.IsDBNull(3) ? null : reader.GetInt32(3),
+                    CreatedAt = reader.GetDateTime(4),
+                    UpdatedAt = reader.GetDateTime(5)
+                });
+            }
+
+            tasks = newTasks;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading tasks: {ex}");
+        }
+    }
+
+    private async Task CreateEmployeesTableIfNotExistsAsync()
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        var checkTableQuery = @"
+        SELECT name FROM sqlite_master WHERE type='table' AND name='Employees';";
+        using var checkCommand = new SqliteCommand(checkTableQuery, connection);
+        var tableExists = await checkCommand.ExecuteScalarAsync() != null;
+
+        if (!tableExists)
+        {
+            var createTableQuery = @"
+            CREATE TABLE Employees (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Username TEXT NOT NULL,
+                Password TEXT NOT NULL
+            );";
+            using var createTableCommand = new SqliteCommand(createTableQuery, connection);
+            await createTableCommand.ExecuteNonQueryAsync();
+        }
+    }
+
+    private async Task LoadEmployeesAsync()
+    {
+        try
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            await connection.OpenAsync();
+
+            var query = "SELECT Id, Username FROM Employees ORDER BY Username";
+            using var command = new SqliteCommand(query, connection);
+            using var reader = await command.ExecuteReaderAsync();
+
+            var newEmployees = new List<Employee>();
+            while (await reader.ReadAsync())
+            {
+                newEmployees.Add(new Employee
+                {
+                    Id = reader.GetInt32(0),
+                    Username = reader.GetString(1)
+                });
+            }
+
+            employees = newEmployees;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading employees: {ex}");
+        }
+    }
+
+    private async Task UpdateTaskAsync(TaskItem task, bool value)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            await connection.OpenAsync();
+
+            var command = new SqliteCommand(@"
+                UPDATE ToDo 
+                SET IsComplete = @isComplete, 
+                    UpdatedAt = DATETIME('now', 'localtime'),
+                    AssignedTo = @assignedTo,
+                    Task = @task
+                WHERE Id = @id", connection);
+
+            command.Parameters.AddWithValue("@isComplete", value ? 1 : 0);
+            command.Parameters.AddWithValue("@assignedTo", task.AssignedTo.HasValue ? task.AssignedTo : DBNull.Value);
+            command.Parameters.AddWithValue("@task", task.Task);
+            command.Parameters.AddWithValue("@id", task.Id);
+
+            await command.ExecuteNonQueryAsync();
+            await LoadTasksAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating task: {ex}");
+        }
+    }
+
+    private async Task DeleteTaskAsync(TaskItem task)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            await connection.OpenAsync();
+
+            var command = new SqliteCommand("DELETE FROM ToDo WHERE Id = @id", connection);
+            command.Parameters.AddWithValue("@id", task.Id);
+
+            await command.ExecuteNonQueryAsync();
+            await LoadTasksAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error deleting task: {ex}");
+        }
+    }
+
+    private async Task AssignTaskToEmployee()
+    {
+        if (string.IsNullOrWhiteSpace(newTask))
+        {
+            return;
+        }
+
+        try
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            await connection.OpenAsync();
+
+            var command = new SqliteCommand(@"
+                INSERT INTO ToDo (Task, IsComplete, AssignedTo, CreatedAt, UpdatedAt) 
+                VALUES (@task, @isComplete, @assignedTo, DATETIME('now', 'localtime'), DATETIME('now', 'localtime'))",
+                connection);
+
+            command.Parameters.AddWithValue("@task", newTask);
+            command.Parameters.AddWithValue("@isComplete", 0);
+            command.Parameters.AddWithValue("@assignedTo", string.IsNullOrEmpty(selectedEmployee) ? DBNull.Value : selectedEmployee);
+
+            await command.ExecuteNonQueryAsync();
+            await LoadTasksAsync();
+
+            selectedEmployee = string.Empty;
+            newTask = string.Empty;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error assigning task: {ex}");
+        }
+    }
+    private async Task HandleLogout()
+    {
+        await ProtectedSessionStore.DeleteAsync("isAdminLoggedIn");
+        IsAdminLoggedIn = false;
+        StateHasChanged(); 
+    }
+    private async Task HandleAssign()
+    {
+        await AssignTaskToEmployee();
+    }
+
+    private string GetEmployeeUsername(int? employeeId)
+    {
+        var employee = employees.FirstOrDefault(e => e.Id == employeeId);
+        return employee?.Username ?? "Unassigned";
+    }
+
+    public class TaskItem
+    {
+        public int Id { get; set; }
+        public string Task { get; set; }
+        public bool IsComplete { get; set; }
+        public int? AssignedTo { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime UpdatedAt { get; set; }
+    }
+
+    public class Employee
+    {
+        public int Id { get; set; }
+        public string Username { get; set; }
+    }
+}

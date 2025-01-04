@@ -1,0 +1,144 @@
+@page "/tasks"
+@using Microsoft.AspNetCore.Mvc.TagHelpers
+@using Microsoft.Data.Sqlite
+
+@rendermode InteractiveServer
+
+<PageTitle>Home</PageTitle>
+
+<h1 class="text-center">To-Do Pro App</h1>
+
+<div class="mb-3">
+    <label for="newTask" class="form-label">Add a new task:</label>
+    <input id="newTask" type="text" class="form-control" @bind="newTask" placeholder="Enter task" />
+    <button class="btn btn-primary mt-2" @onclick="AddTaskAsync">Add Task</button>
+</div>
+
+<h3>Your To-Do List:</h3>
+<ul class="list-group">
+    @foreach (var task in tasks)
+    {
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+            <input type="checkbox" class="form-check-input" checked="@task.IsComplete" @onclick="() => UpdateTaskAsync(task)" />
+            <span class="task-text" style="text-decoration: @(task.IsComplete ? "line-through" : "none")">@task.Task</span>
+            <button class="btn btn-danger btn-sm" @onclick="() => DeleteTaskAsync(task)">Delete</button>
+        </li>
+    }
+</ul>
+
+@if (tasks.Count == 0)
+{
+    <p class="text-center text-muted mt-3">No tasks found. Add some tasks!</p>
+}
+
+@code {
+    private const string ConnectionString = "Data Source=todo.db";
+    private string newTask;
+    private List<TaskItem> tasks = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTasksAsync();
+    }
+
+    private async Task AddTaskAsync()
+    {
+        if (!string.IsNullOrEmpty(newTask))
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            await connection.OpenAsync();
+
+            try
+            {
+                var command = connection.CreateCommand();
+                command.CommandText = "INSERT INTO ToDo (Task) VALUES (@task)";
+                command.Parameters.AddWithValue("@task", newTask);
+
+                await command.ExecuteNonQueryAsync();
+                newTask = string.Empty; // Clear the input field
+
+                await LoadTasksAsync(); // Reload the tasks
+            }
+            catch (Exception ex)
+            {
+               
+                Console.WriteLine($"Error adding task: {ex.Message}");
+            }
+        }
+    }
+
+    private async Task LoadTasksAsync()
+    {
+        tasks.Clear();
+
+        using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        // Check if the ToDo table exists, if not, create it.
+        var checkTableQuery = @"
+            SELECT name FROM sqlite_master WHERE type='table' AND name='ToDo';";
+        using var checkCommand = new SqliteCommand(checkTableQuery, connection);
+        var tableExists = await checkCommand.ExecuteScalarAsync() != null;
+
+        if (!tableExists)
+        {
+            var createTableQuery = @"
+                CREATE TABLE ToDo (
+                    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    Task TEXT NOT NULL,
+                    IsComplete INTEGER NOT NULL DEFAULT 0
+                );";
+            using var createTableCommand = new SqliteCommand(createTableQuery, connection);
+            await createTableCommand.ExecuteNonQueryAsync();
+        }
+
+        // Load tasks from the ToDo table.
+        var query = "SELECT Id, Task, IsComplete FROM ToDo";
+        using var command = new SqliteCommand(query, connection);
+
+        using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            tasks.Add(new TaskItem
+            {
+                Id = reader.GetInt32(0),
+                Task = reader.GetString(1),
+                IsComplete = reader.GetInt32(2) == 1
+            });
+        }
+    }
+
+    private async Task UpdateTaskAsync(TaskItem task)
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        var command = new SqliteCommand("UPDATE ToDo SET IsComplete = @isComplete WHERE Id = @id", connection);
+        command.Parameters.AddWithValue("@isComplete", task.IsComplete ? 1 : 0);
+        command.Parameters.AddWithValue("@id", task.Id);
+
+        await command.ExecuteNonQueryAsync();
+
+        await LoadTasksAsync();
+    }
+
+    private async Task DeleteTaskAsync(TaskItem task)
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        var command = new SqliteCommand("DELETE FROM ToDo WHERE Id = @id", connection);
+        command.Parameters.AddWithValue("@id", task.Id);
+
+        await command.ExecuteNonQueryAsync();
+
+        await LoadTasksAsync();
+    }
+
+    public class TaskItem
+    {
+        public int Id { get; set; }
+        public string Task { get; set; }
+        public bool IsComplete { get; set; }
+    }
+}

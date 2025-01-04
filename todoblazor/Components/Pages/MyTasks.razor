@@ -1,0 +1,238 @@
+@page "/my-tasks"
+@using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage
+@using Microsoft.Data.Sqlite
+@inject ProtectedSessionStorage ProtectedSessionStore
+@inject NavigationManager NavigationManager
+
+@rendermode InteractiveServer
+
+<PageTitle>My Tasks</PageTitle>
+
+@if (isLoading)
+{
+    <p class="text-center">Loading...</p>
+}
+else if (!isEmployeeLoggedIn)
+{
+    <h3>Employee Login</h3>
+    <EditForm Model="loginModel" OnValidSubmit="HandleLogin">
+        <DataAnnotationsValidator/>
+        <ValidationSummary/>
+
+        @if (!string.IsNullOrEmpty(loginErrorMessage))
+        {
+            <div class="alert alert-danger" role="alert">
+                @loginErrorMessage
+            </div>
+        }
+
+        <div class="mb-3">
+            <label for="username" class="form-label">Username</label>
+            <InputText id="username" class="form-control" @bind-Value="loginModel.Username"/>
+        </div>
+        <div class="mb-3">
+            <label for="password" class="form-label">Password</label>
+            <InputText id="password" type="password" class="form-control" @bind-Value="loginModel.Password"/>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Login</button>
+    </EditForm>
+}
+else
+{
+    <h3>Welcome, @loginModel.Username! 👋</h3>
+    <ul class="list-group">
+        @foreach (var task in tasks)
+        {
+            <li class="list-group-item d-flex align-items-center gap-4">
+                <input type="checkbox" class="form-check-input" @bind="task.IsComplete"
+                       @onclick="(v) => UpdateTaskAsync(task, !task.IsComplete)"/>
+                <span class="task-text" style="text-decoration: @(task.IsComplete ? "line-through" : "none")">
+                    @task.Task
+                </span>
+            </li>
+        }
+    </ul>
+
+    @if (tasks.Count == 0)
+    {
+        <p class="text-center text-muted mt-3">No tasks assigned yet.</p>
+    }
+
+    <button @onclick="HandleLogout" class="btn btn-danger mt-3">Logout</button>
+}
+
+@code {
+    private bool isEmployeeLoggedIn;
+    private bool isLoading = true;
+    private List<TaskItem> tasks = new();
+    private LoginModel loginModel = new();
+    private string loginErrorMessage;
+    private string welcomeMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Check if the Employees table exists, if not create it.
+        await EnsureEmployeesTableExists();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            isLoading = false;
+            await CheckIfEmployeeLoggedIn();
+            if (isEmployeeLoggedIn)
+            {
+                await LoadTasksAsync();
+                welcomeMessage = $"Welcome, {loginModel.Username}! 👋";
+            }
+
+            StateHasChanged();
+        }
+    }
+
+    private async Task EnsureEmployeesTableExists()
+    {
+        using var connection = new SqliteConnection("Data Source=todo.db");
+        await connection.OpenAsync();
+
+        var createTableQuery = @"
+            CREATE TABLE IF NOT EXISTS Employees (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Username TEXT NOT NULL,
+                Password TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS ToDo (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Task TEXT NOT NULL,
+                IsComplete INTEGER NOT NULL DEFAULT 0,
+                AssignedTo INTEGER,
+                CreatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UpdatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (AssignedTo) REFERENCES Employees(Id) ON DELETE SET NULL
+            );
+";
+
+        using var command = new SqliteCommand(createTableQuery, connection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task CheckIfEmployeeLoggedIn()
+    {
+        var result = await ProtectedSessionStore.GetAsync<LoginModel>("loginModel");
+        if (result.Success)
+        {
+            loginModel = result.Value;
+            isEmployeeLoggedIn = true;
+        }
+    }
+
+    private async Task HandleLogin()
+    {
+        using var connection = new SqliteConnection("Data Source=todo.db");
+        await connection.OpenAsync();
+
+        var query = @"
+            SELECT COUNT(1) 
+            FROM Employees 
+            WHERE Username = @username AND Password = @password";
+
+        using var command = new SqliteCommand(query, connection);
+        command.Parameters.AddWithValue("@username", loginModel.Username);
+        command.Parameters.AddWithValue("@password", loginModel.Password);
+
+        var result = await command.ExecuteScalarAsync();
+
+        if (Convert.ToInt32(result) > 0)
+        {
+            // Store the entire LoginModel in session storage
+            await ProtectedSessionStore.SetAsync("loginModel", loginModel);
+
+            // Clear the password field
+            loginModel.Password = null;
+
+            isEmployeeLoggedIn = true;
+
+            // Clear any previous error message
+            loginErrorMessage = null;
+
+            // Load tasks after login
+            await LoadTasksAsync();
+        }
+        else
+        {
+            // Set error message
+            loginErrorMessage = "Invalid username or password.";
+        }
+    }
+
+    private async Task LoadTasksAsync()
+    {
+        tasks.Clear();
+
+        using var connection = new SqliteConnection("Data Source=todo.db");
+        await connection.OpenAsync();
+
+        // Query for tasks assigned to the logged-in employee
+        var query = @"
+            SELECT Id, Task, IsComplete 
+            FROM ToDo 
+            WHERE AssignedTo = (SELECT Id FROM Employees WHERE Username = @assignedTo)";
+
+        using var command = new SqliteCommand(query, connection);
+        command.Parameters.AddWithValue("@assignedTo", loginModel.Username); // Use stored username
+
+        using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            tasks.Add(new TaskItem
+            {
+                Id = reader.GetInt32(0),
+                Task = reader.GetString(1),
+                IsComplete = reader.GetInt32(2) == 1
+            });
+        }
+    }
+
+    private async Task UpdateTaskAsync(TaskItem task, bool value)
+    {
+        using var connection = new SqliteConnection("Data Source=todo.db");
+        await connection.OpenAsync();
+
+        Console.WriteLine("Updating task...");
+        Console.WriteLine($"Task ID: {task.Id}, IsComplete: {task.IsComplete}");
+
+        var command = new SqliteCommand("UPDATE ToDo SET IsComplete = @isComplete WHERE Id = @id", connection);
+        command.Parameters.AddWithValue("@isComplete", value);
+        command.Parameters.AddWithValue("@id", task.Id);
+
+        await command.ExecuteNonQueryAsync();
+
+        Console.WriteLine("Task updated successfully");
+
+        await LoadTasksAsync(); // Reload the tasks to reflect the update
+    }
+
+    private async Task HandleLogout()
+    {
+        await ProtectedSessionStore.DeleteAsync("loginModel");
+        isEmployeeLoggedIn = false;
+        StateHasChanged();
+    }
+
+    public class TaskItem
+    {
+        public int Id { get; set; }
+        public string Task { get; set; }
+        public bool IsComplete { get; set; }
+    }
+
+    public class LoginModel
+    {
+        public string Username { get; set; }
+        public string Password { get; set; }
+    }
+
+}

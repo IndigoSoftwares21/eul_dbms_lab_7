@@ -1,0 +1,42 @@
+@page "/login"
+@using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage
+@inject ProtectedSessionStorage ProtectedSessionStore
+@inject NavigationManager NavigationManager
+@rendermode InteractiveServer
+
+
+<h2 class="text-center">Admin Login</h2>
+
+<div class="mb-3">
+    <label for="username" class="form-label">Username</label>
+    <input id="username" type="text" class="form-control" @bind="Username" placeholder="Enter Username" />
+</div>
+<div class="mb-3">
+    <label for="password" class="form-label">Password</label>
+    <input id="password" type="password" class="form-control" @bind="Password" placeholder="Enter Password" />
+</div>
+<button class="btn btn-primary mt-2" @onclick="LoginAsync">Login</button>
+
+@if (!string.IsNullOrEmpty(ErrorMessage))
+{
+    <div class="text-danger mt-3">@ErrorMessage</div>
+}
+
+@code {
+    private string Username { get; set; }
+    private string Password { get; set; }
+    private string ErrorMessage { get; set; }
+
+    private async Task LoginAsync()
+    {
+        if (Username == "admin" && Password == "password")
+        {
+            await ProtectedSessionStore.SetAsync("isAdminLoggedIn", true);
+            NavigationManager.NavigateTo("/");
+        }
+        else
+        {
+            ErrorMessage = "Invalid username or password.";
+        }
+    }
+}

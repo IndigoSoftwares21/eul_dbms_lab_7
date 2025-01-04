@@ -1,0 +1,195 @@
+@using Microsoft.Data.Sqlite
+@page "/employees"
+
+@using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage
+@inject ProtectedSessionStorage ProtectedSessionStore
+@inject NavigationManager NavigationManager
+
+@rendermode InteractiveServer
+
+@if (isLoading)
+{
+    <p class="text-center">Loading...</p>
+}
+else if (!IsAdminLoggedIn)
+{
+    <div class="d-flex justify-content-center flex-column align-items-center">
+        <p class="text-center">Please log in as admin to access this page.</p>
+        <a class="btn btn-primary" href="/login">Login</a>
+    </div>
+}
+else
+{
+    <h3>Employee Management</h3>
+    <div class="mb-3">
+        <label for="employeeUsername" class="form-label">Employee Username</label>
+        <input id="employeeUsername" type="text" class="form-control" @bind="EmployeeUsername" placeholder="Enter Employee Username" />
+    </div>
+    <div class="mb-3">
+        <label for="employeePassword" class="form-label">Employee Password</label>
+        <input id="employeePassword" type="password" class="form-control" @bind="EmployeePassword" placeholder="Enter Employee Password" />
+    </div>
+    <button class="btn btn-primary" @onclick="AddEmployeeAsync">Add Employee</button>
+
+    <ul class="list-group mt-3">
+        @foreach (var employee in employees)
+        {
+            <li class="list-group-item d-flex justify-content-between align-items-center">
+                <span>@employee.Username (ID: @employee.Id)</span>
+                <button class="btn btn-danger btn-sm" @onclick="() => DeleteEmployeeAsync(employee.Id)">Delete</button>
+            </li>
+        }
+    </ul>
+
+    
+    
+    <button @onclick="HandleLogout" class="btn btn-danger mt-3">Logout</button>
+}
+
+@code {
+    private string EmployeeUsername;
+    private string EmployeePassword;
+    private List<Employee> employees = new();
+    private bool isLoading;
+    private bool IsAdminLoggedIn;
+
+    
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await CheckIsAdminLoggedIn();
+            await CreateEmployeesTableIfNotExistsAsync();
+            await LoadEmployeesAsync();
+            isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task CheckIsAdminLoggedIn()
+    {
+        var result = await ProtectedSessionStore.GetAsync<bool>("isAdminLoggedIn");
+        IsAdminLoggedIn = result is { Success: true, Value: true };
+        Console.WriteLine(IsAdminLoggedIn);
+    }
+    private async Task CreateEmployeesTableIfNotExistsAsync()
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        // Check if the Employees table exists
+        var checkTableQuery = @"
+        SELECT name FROM sqlite_master WHERE type='table' AND name='Employees';";
+        using var checkCommand = new SqliteCommand(checkTableQuery, connection);
+        var tableExists = await checkCommand.ExecuteScalarAsync() != null;
+
+        if (!tableExists)
+        {
+            var createTableQuery = @"
+            CREATE TABLE Employees (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Username TEXT NOT NULL,
+                Password TEXT NOT NULL
+            );";
+            using var createTableCommand = new SqliteCommand(createTableQuery, connection);
+            await createTableCommand.ExecuteNonQueryAsync();
+        }
+    }
+
+    private const string ConnectionString = "Data Source=todo.db";
+
+    public async Task AddEmployeeAsync()
+    {
+        if (!string.IsNullOrEmpty(EmployeeUsername) && !string.IsNullOrEmpty(EmployeePassword))
+        {
+            using var connection = new SqliteConnection(ConnectionString);
+            await connection.OpenAsync();
+
+            // Check if the table exists, if not create it
+            var checkTableQuery = @"
+                SELECT name FROM sqlite_master WHERE type='table' AND name='Employees';";
+
+            using var checkTableCommand = new SqliteCommand(checkTableQuery, connection);
+            var tableExists = await checkTableCommand.ExecuteScalarAsync() != null;
+
+            if (!tableExists)
+            {
+                var createTableQuery = @"
+                    CREATE TABLE Employees (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        Username TEXT NOT NULL,
+                        Password TEXT NOT NULL
+                    );";
+                using var createTableCommand = new SqliteCommand(createTableQuery, connection);
+                await createTableCommand.ExecuteNonQueryAsync();
+            }
+
+            // Insert new employee
+            var command = new SqliteCommand(
+                "INSERT INTO Employees (Username, Password) VALUES (@username, @password)",
+                connection
+            );
+
+            command.Parameters.AddWithValue("@username", EmployeeUsername);
+            command.Parameters.AddWithValue("@password", EmployeePassword);
+
+            await command.ExecuteNonQueryAsync();
+
+            // Reload employees after adding
+            await LoadEmployeesAsync();
+
+            EmployeeUsername = string.Empty;
+            EmployeePassword = string.Empty;
+        }
+    }
+    private async Task HandleLogout()
+    {
+        await ProtectedSessionStore.DeleteAsync("isAdminLoggedIn");
+        IsAdminLoggedIn = false;
+        StateHasChanged(); 
+    }
+    
+    private async Task LoadEmployeesAsync()
+    {
+        employees.Clear();
+
+        using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        var query = "SELECT Id, Username, Password FROM Employees";
+        using var command = new SqliteCommand(query, connection);
+
+        using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            employees.Add(new Employee
+            {
+                Id = reader.GetInt32(0),
+                Username = reader.GetString(1),
+                Password = reader.GetString(2)
+            });
+        }
+    }
+    private async Task DeleteEmployeeAsync(int employeeId)
+    {
+        using var connection = new SqliteConnection(ConnectionString);
+        await connection.OpenAsync();
+
+        var deleteQuery = "DELETE FROM Employees WHERE Id = @id";
+        using var command = new SqliteCommand(deleteQuery, connection);
+        command.Parameters.AddWithValue("@id", employeeId);
+
+        await command.ExecuteNonQueryAsync();
+
+        // Reload the employees list
+        await LoadEmployeesAsync();
+    }
+
+
+    public class Employee
+    {
+        public int Id { get; set; }
+        public string Username { get; set; }
+        public string Password { get; set; }
+    }
+}

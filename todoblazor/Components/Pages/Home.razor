@@ -9,12 +9,12 @@
 @rendermode InteractiveServer
 
 <PageTitle>Home</PageTitle>
-<Modal @ref="editTaskModal" />
+<Modal @ref="editTaskModal"/>
 
 @if (isLoading)
 {
     <div class="d-flex justify-content-center">
-        <Spinner Type="SpinnerType.Border" />
+        <Spinner Type="SpinnerType.Border"/>
     </div>
 }
 else if (!IsAdminLoggedIn)
@@ -26,27 +26,34 @@ else if (!IsAdminLoggedIn)
 }
 else
 {
-    <h1 class="text-center">To-Do Pro App</h1>
-
-    <h3>Your To-Do List:</h3>
+    <h5>Welcome, Admin 👋</h5>
+    <br/>
     <ul class="list-group">
         @foreach (var task in tasks)
         {
-            <li class="list-group-item d-flex justify-content-between align-items-center">
-                <input type="checkbox" class="form-check-input" checked="@task.IsComplete"
-                       @onchange="async (e) => await UpdateTaskAsync(task, e.Value is bool value && value)" />
-                <span class="task-text"
-                      style="text-decoration: @(task.IsComplete ? "line-through" : "none")">@task.Task</span>
+            <li class="list-group-item d-flex justify-content-between align-items-start gap-1">
+                <div>
+                    <div>
+                        <input type="checkbox" class="form-check-input" checked="@task.IsComplete"
+                               @onchange="async (e) => await UpdateTaskAsync(task, e.Value is bool value && value)"/>
+                        <span class="task-text"
+                              style="text-decoration: @(task.IsComplete ? "line-through" : "none")">@task.Task</span>
+                    </div>
 
-                @if (task.AssignedTo != null)
-                {
-                    <span class="badge bg-info">Assigned to: @GetEmployeeUsername(task.AssignedTo)</span>
-                }
+                    @if (task.AssignedTo != null)
+                    {
+                        <span class="badge bg-info"> @GetEmployeeUsername(task.AssignedTo)</span>
+                    }
+                </div>
 
-                <span class="text-muted">Updated: @task.UpdatedAt.ToString("g")</span>
-
-                <button class="btn btn-warning btn-sm" @onclick="() => OpenEditTaskModal(task)">Edit</button>
-                <button class="btn btn-danger btn-sm" @onclick="() => DeleteTaskAsync(task)">Delete</button>
+                <div class="d-flex flex-column align-content-end justify-content-end gap-1">
+                    <div class="d-flex align-content-end justify-content-end">
+                        <button class="btn btn-sm" @onclick="() => OpenEditTaskModal(task)">Edit</button>
+                        <button class="btn btn-danger btn-sm" @onclick="() => DeleteTaskAsync(task)">Delete</button>
+                    </div>
+                    <small class="text-muted text-black-50 text-end">@task.UpdatedAt.ToString("ddd, dd MMM")</small>
+                </div>
+                
             </li>
         }
     </ul>
@@ -55,8 +62,10 @@ else
     {
         <p class="text-center text-muted mt-3">No tasks found. Add some tasks!</p>
     }
- <br/>
-    <h3>Assign Tasks to Employees:</h3>
+
+    <br/>
+    <br/>
+    <h5>Assign Tasks to Employees:</h5>
     <div class="mb-3">
         <label for="assignTo" class="form-label">Assign Task to:</label>
         <select id="assignTo" class="form-control" @bind="selectedEmployee">
@@ -68,11 +77,13 @@ else
         </select>
 
         <label for="taskInput" class="form-label mt-2">Enter Task to Assign:</label>
-        <input id="taskInput" class="form-control" type="text" @bind="newTask" placeholder="Enter task description" />
+        <input id="taskInput" class="form-control" type="text" @bind="newTask" placeholder="Enter task description"/>
 
         <button class="btn btn-primary mt-2" @onclick="HandleAssign">Assign</button>
     </div>
-    <button @onclick="HandleLogout" class="btn btn-danger mt-3">Logout</button>
+    <div class="d-flex justify-content-end" style="width: 100%;">
+        <button @onclick="HandleLogout" class="btn btn-danger mt-3">Logout</button>
+    </div>
 }
 
 <Modal @ref="editTaskModal">
@@ -80,7 +91,7 @@ else
         <EditForm Model="selectedTask" OnValidSubmit="HandleEditSave">
             <div class="mb-3">
                 <label for="taskName" class="form-label">Task Name</label>
-                <input id="taskName" class="form-control" @bind="selectedTask.Task" />
+                <input id="taskName" class="form-control" @bind="selectedTask.Task"/>
             </div>
             <div class="mb-3">
                 <label for="assignTo" class="form-label">Assign To</label>
@@ -332,12 +343,14 @@ else
             Console.WriteLine($"Error assigning task: {ex}");
         }
     }
+
     private async Task HandleLogout()
     {
         await ProtectedSessionStore.DeleteAsync("isAdminLoggedIn");
         IsAdminLoggedIn = false;
-        StateHasChanged(); 
+        StateHasChanged();
     }
+
     private async Task HandleAssign()
     {
         await AssignTaskToEmployee();
@@ -364,4 +377,5 @@ else
         public int Id { get; set; }
         public string Username { get; set; }
     }
+
 }

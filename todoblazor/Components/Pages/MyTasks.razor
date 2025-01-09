@@ -59,7 +59,9 @@ else
         <p class="text-center text-muted mt-3">No tasks assigned yet.</p>
     }
 
-    <button @onclick="HandleLogout" class="btn btn-danger mt-3">Logout</button>
+    <div class="d-flex justify-content-end" style="width: 100%;">
+        <button @onclick="HandleLogout" class="btn btn-danger mt-3">Logout</button>
+    </div>
 }
 
 @code {
@@ -137,7 +139,8 @@ else
         var query = @"
             SELECT COUNT(1) 
             FROM Employees 
-            WHERE Username = @username AND Password = @password";
+            WHERE LOWER(Username) = LOWER(@username) AND Password = @password";
+
 
         using var command = new SqliteCommand(query, connection);
         command.Parameters.AddWithValue("@username", loginModel.Username);
